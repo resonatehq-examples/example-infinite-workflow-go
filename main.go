@@ -10,15 +10,14 @@
 //
 // WHY NO continueAsNew
 //
-// Temporal and similar systems impose an event-history cap (typically 50 000
-// events). Long-running loops must periodically call continueAsNew to restart
-// the workflow with fresh state — extracting accumulated state from the old
-// execution and passing it forward as arguments is the developer's
-// responsibility.
+// Some durable-execution platforms impose an event-history ceiling (typically
+// ~50,000 events) that forces long-running loops to periodically call
+// continueAsNew — extracting accumulated state from the old execution and
+// passing it forward as arguments. Resonate doesn't have that ceiling, so the
+// loop just runs.
 //
-// Resonate has no event-history limit. Each ctx.Sleep creates a single durable
-// timer promise. Once the promise settles, it is done — it does not accumulate
-// in a growing replay log. The loop just runs. No continueAsNew needed.
+// Each ctx.Sleep creates a single durable timer promise. Once the promise
+// settles, it is done — it does not accumulate in a growing replay log.
 //
 // BOUNDED VS UNBOUNDED MODE
 //

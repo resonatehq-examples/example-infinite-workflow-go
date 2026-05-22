@@ -6,28 +6,38 @@ A heartbeat workflow that runs forever — sleeping, printing a tick, sleeping, 
 
 ## What this demonstrates
 
-- **Unbounded execution**: the workflow loops indefinitely with no history limit.
-- **Durable sleep**: `ctx.Sleep()` between iterations survives crashes and restarts.
-- **No continueAsNew**: Resonate has no event-history cap — just loop.
+- A workflow loop where each tick prints durably and sleeps with `ctx.Sleep` between iterations.
+- Durable suspension across worker restarts — when running against a real server, the timer fires after the restart and the workflow picks up where it left off.
+
+Resonate doesn't have an event-history ceiling, so the loop has no built-in upper bound. The default of 5 iterations is for CI and demos; set `-iterations=0` for production.
 
 ## Why no continueAsNew
 
-Temporal and similar systems impose an event-history limit (typically 50 000 events). A long-running loop must periodically call `continueAsNew` to restart the workflow with fresh state, extracting accumulated state from the old execution and passing it forward as arguments. That is the developer's problem.
+Some durable-execution platforms impose an event-history ceiling (typically ~50,000 events) that forces long-running workflows to call `continueAsNew` periodically — extracting state from the old execution and passing it forward as arguments. Resonate doesn't have that ceiling, so this example just loops.
 
-Resonate has no event-history limit. Each `ctx.Sleep` creates a single durable timer promise. Once the promise settles it is done — it does not accumulate in a growing replay log. The loop just runs. No `continueAsNew` required.
+Each `ctx.Sleep` creates a single durable timer promise. Once the promise settles it is done — it does not accumulate in a growing replay log.
 
 ## The code
 
 ```go
 func heartbeatWorkflow(ctx *resonate.Context, args WorkflowArgs) (WorkflowResult, error) {
     for i := 0; args.Iterations == 0 || i < args.Iterations; i++ {
-        fmt.Printf("[workflow] tick %d at %s\n", i+1, time.Now().UTC().Format(time.RFC3339))
+        // Wrap each tick in ctx.Run so it is a durable sub-step. Completed
+        // ticks are short-circuited by the promise store on replay rather
+        // than re-executing — each tick line prints exactly once.
+        tickF, err := ctx.Run(heartbeatTick, TickArgs{Tick: i + 1})
+        if err != nil {
+            return WorkflowResult{}, fmt.Errorf("ctx.Run tick: %w", err)
+        }
+        if err := tickF.Await(nil); err != nil {
+            return WorkflowResult{}, fmt.Errorf("tick await: %w", err)
+        }
 
-        f, err := ctx.Sleep(time.Duration(args.IntervalSec) * time.Second)
+        sleepF, err := ctx.Sleep(time.Duration(args.IntervalSec) * time.Second)
         if err != nil {
             return WorkflowResult{}, fmt.Errorf("ctx.Sleep: %w", err)
         }
-        if err := f.Await(nil); err != nil {
+        if err := sleepF.Await(nil); err != nil {
             return WorkflowResult{}, fmt.Errorf("sleep await: %w", err)
         }
     }
@@ -35,7 +45,7 @@ func heartbeatWorkflow(ctx *resonate.Context, args WorkflowArgs) (WorkflowResult
 }
 ```
 
-`ctx.Sleep` returns `(*Future, error)`. Calling `f.Await(nil)` blocks the workflow until the durable timer promise resolves. Each settled promise is discarded — no history accumulation.
+`ctx.Sleep` returns `(*Future, error)`. Calling `f.Await(nil)` blocks the workflow until the durable timer promise resolves. Wrapping the tick in `ctx.Run` makes it idempotent under replay — without it, every prior tick would re-print every time the workflow resumed.
 
 ## Bounded vs unbounded mode
 
